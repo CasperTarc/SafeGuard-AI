@@ -1,121 +1,99 @@
+import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:sensors_plus/sensors_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const SafeGuardApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class SafeGuardApp extends StatelessWidget {
+  const SafeGuardApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'SafeGuard AI — Sensor Demo',
+      theme: ThemeData(primarySwatch: Colors.red),
+      home: const SensorHomePage(),
+      debugShowCheckedModeBanner: false,
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
+class SensorHomePage extends StatefulWidget {
+  const SensorHomePage({super.key});
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<SensorHomePage> createState() => _SensorHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _SensorHomePageState extends State<SensorHomePage> {
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  double _x = 0, _y = 0, _z = 0;
+  String _status = 'Tap Start to read accelerometer';
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  @override
+  void dispose() {
+    _accelSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _requestPermissions() async {
+    // Most devices do not require an explicit permission for accelerometer,
+    // but this requests sensor permission when available.
+    await Permission.sensors.request();
+  }
+
+  void _startListening() async {
+    setState(() => _status = 'Requesting permission...');
+    await _requestPermissions();
+    setState(() => _status = 'Listening...');
+    // Use the non-deprecated API
+    _accelSub = accelerometerEventStream().listen((AccelerometerEvent event) {
+      setState(() {
+        _x = event.x;
+        _y = event.y;
+        _z = event.z;
+      });
     });
   }
 
+  void _stopListening() {
+    _accelSub?.cancel();
+    _accelSub = null;
+    setState(() => _status = 'Stopped');
+  }
+
+  double get _magnitude => math.sqrt(_x * _x + _y * _y + _z * _z);
+
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      appBar: AppBar(title: const Text('SafeGuard AI — Sensor Demo')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+            Text('Status: $_status', style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 12),
+            const Text('Accelerometer', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('x: ${_x.toStringAsFixed(3)}'),
+            Text('y: ${_y.toStringAsFixed(3)}'),
+            Text('z: ${_z.toStringAsFixed(3)}'),
+            const SizedBox(height: 8),
+            Text('magnitude: ${_magnitude.toStringAsFixed(3)}'),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: _accelSub == null ? _startListening : _stopListening,
+              child: Text(_accelSub == null ? 'Start' : 'Stop'),
             ),
+            const SizedBox(height: 24),
+            const Text('Tip: Run on a real device for accurate sensor data.'),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
       ),
     );
   }
