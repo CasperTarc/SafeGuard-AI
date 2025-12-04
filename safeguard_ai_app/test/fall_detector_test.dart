@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:safeguard_ai_app/src/fall_detector.dart';
@@ -43,7 +42,9 @@ void main() {
         if (m.startsWith('[confirmed]')) {
           print('');
           final rest = m.substring('[confirmed]'.length).trim();
-          print('${tagTime('[' + elapsed() + ']')} ${tagConfirmed('confirmed')} $rest');
+          print(
+            '${tagTime('[' + elapsed() + ']')} ${tagConfirmed('confirmed')} $rest',
+          );
         } else {
           print('${tagTime('[' + elapsed() + ']')} ${tagDebug('debug')} $m');
         }
@@ -54,7 +55,8 @@ void main() {
       final impactSub = detector.impactStream.listen((ev) {
         impacts.add(ev);
         print(
-            '${tagTime('[' + elapsed() + ']')} ${tagImpact('impact')} peak=${ev.peakMagnitude.toStringAsFixed(2)} at ${friendlyTimestamp(ev.timestamp)}');
+          '${tagTime('[' + elapsed() + ']')} ${tagImpact('impact')} peak=${ev.peakMagnitude.toStringAsFixed(2)} at ${friendlyTimestamp(ev.timestamp)}',
+        );
       });
 
       // Confirmed fall (purple)
@@ -67,14 +69,18 @@ void main() {
 
       try {
         // Info (blue)
-        print('${tagTime('[' + elapsed() + ']')} ${tagInfo('info')} Test start: insert first (1st) impact at t=0');
+        print(
+          '${tagTime('[' + elapsed() + ']')} ${tagInfo('info')} Test start: insert first (1st) impact at t=0',
+        );
         detector.addSample(detector.impactThreshold + 1.0, DateTime.now());
 
         // Wait real 3 seconds
         await Future<void>.delayed(const Duration(seconds: 3));
 
         // Insert second spike and message
-        print('\n${tagTime('[' + elapsed() + ']')} ${tagInfo('info')} Insert new impact spike (2nd): Recalculate the time again...');
+        print(
+          '\n${tagTime('[' + elapsed() + ']')} ${tagInfo('info')} Insert new impact spike (2nd): Recalculate the time again...',
+        );
         detector.addSample(detector.impactThreshold + 2.0, DateTime.now());
 
         // Wait for confirmed fall (should be ~3s + 8s = ~11s). Allow up to 15s total for safety.
@@ -84,9 +90,17 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 100));
 
         // Assertions
-        expect(confirmedAt, isNotNull, reason: 'Detector should have emitted a confirmed fall');
-        expect(impacts.length >= 2, true,
-            reason: 'Expected at least two ImpactEvent emissions (initial + new spike). Found ${impacts.length}.');
+        expect(
+          confirmedAt,
+          isNotNull,
+          reason: 'Detector should have emitted a confirmed fall',
+        );
+        expect(
+          impacts.length >= 2,
+          true,
+          reason:
+              'Expected at least two ImpactEvent emissions (initial + new spike). Found ${impacts.length}.',
+        );
       } on TimeoutException {
         fail('Timed out waiting for confirmed fall (expected within ~15s)');
       } finally {

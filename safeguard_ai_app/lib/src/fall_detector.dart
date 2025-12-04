@@ -1,4 +1,4 @@
-// Fall Detection Logic
+// FallDetector
 // Core:
 // - Detect a sudden impact spike in the accelerometer magnitude (SMV > 2g) ~ (19.6 m/s^2).
 // - Confirm fall if followed by a period of inactivity. (SMV < 0.3g for 8s).
@@ -17,10 +17,7 @@ class ImpactEvent {
   final DateTime timestamp;
   final double peakMagnitude;
 
-  ImpactEvent({
-    required this.timestamp,
-    required this.peakMagnitude,
-  });
+  ImpactEvent({required this.timestamp, required this.peakMagnitude});
 
   @override
   String toString() =>
@@ -35,11 +32,14 @@ class FallDetector {
   final Duration inactivityWindow; // default 8s
   final Duration minTimeBetweenFalls; // delay between reported falls
 
-  final StreamController<ImpactEvent> _impactController = StreamController.broadcast();
-  final StreamController<DateTime> _fallController = StreamController.broadcast();
+  final StreamController<ImpactEvent> _impactController =
+      StreamController.broadcast();
+  final StreamController<DateTime> _fallController =
+      StreamController.broadcast();
 
   // Debug messages for tests / UI
-  final StreamController<String> _debugController = StreamController.broadcast();
+  final StreamController<String> _debugController =
+      StreamController.broadcast();
 
   // Internal state
   bool _awaitingInactivity = false;
@@ -55,8 +55,8 @@ class FallDetector {
     this.inactivityWindow = const Duration(seconds: 8),
     this.minTimeBetweenFalls = const Duration(seconds: 10),
     this.debug = false,
-  })  : impactThreshold = impactThreshold ?? (2.0 * g),
-        inactivityThreshold = inactivityThreshold ?? (0.3 * g);
+  }) : impactThreshold = impactThreshold ?? (2.0 * g),
+       inactivityThreshold = inactivityThreshold ?? (0.3 * g);
 
   // Streams
   Stream<ImpactEvent> get impactStream => _impactController.stream;
@@ -74,7 +74,9 @@ class FallDetector {
     // Debounce: Ignore processing if recently reported fall (to prevent duplicates).
     if (_lastFallTime != null &&
         timestamp.difference(_lastFallTime!).abs() < minTimeBetweenFalls) {
-      _maybeDebug('Ignored sample: in cooldown (${timestamp.difference(_lastFallTime!).inSeconds}s)');
+      _maybeDebug(
+        'Ignored sample: in cooldown (${timestamp.difference(_lastFallTime!).inSeconds}s)',
+      );
       return;
     }
 
@@ -85,8 +87,13 @@ class FallDetector {
         _lastImpactPeak = math.max(_lastImpactPeak, magnitude);
         _lastImpactTime = timestamp;
 
-        final event = ImpactEvent(timestamp: timestamp, peakMagnitude: _lastImpactPeak);
-        _maybeDebug('Impact update: new strong (2nd) spike while awaiting -> peak=${_lastImpactPeak.toStringAsFixed(2)}');
+        final event = ImpactEvent(
+          timestamp: timestamp,
+          peakMagnitude: _lastImpactPeak,
+        );
+        _maybeDebug(
+          'Impact update: new strong (2nd) spike while awaiting -> peak=${_lastImpactPeak.toStringAsFixed(2)}',
+        );
         // Emit updated impact candidate
         _impactController.add(event);
 
@@ -97,12 +104,16 @@ class FallDetector {
 
       // If motion resumed above inactivity threshold, cancel confirmation.
       if (magnitude > inactivityThreshold) {
-        _maybeDebug('Motion resumed (m=${magnitude.toStringAsFixed(2)}), cancelling confirmation');
+        _maybeDebug(
+          'Motion resumed (m=${magnitude.toStringAsFixed(2)}), cancelling confirmation',
+        );
         _cancelInactivityWait();
         return;
       } else {
         // Still below inactivity threshold -> continue waiting.
-        _maybeDebugIfEnabled('Still inactive (m=${magnitude.toStringAsFixed(2)})');
+        _maybeDebugIfEnabled(
+          'Still inactive (m=${magnitude.toStringAsFixed(2)})',
+        );
         return;
       }
     }
@@ -112,15 +123,22 @@ class FallDetector {
       _lastImpactPeak = math.max(_lastImpactPeak, magnitude);
       _lastImpactTime = timestamp;
 
-      final event = ImpactEvent(timestamp: timestamp, peakMagnitude: _lastImpactPeak);
-      _maybeDebug('Impact detected: Peak = ${_lastImpactPeak.toStringAsFixed(2)}');
+      final event = ImpactEvent(
+        timestamp: timestamp,
+        peakMagnitude: _lastImpactPeak,
+      );
+      _maybeDebug(
+        'Impact detected: Peak = ${_lastImpactPeak.toStringAsFixed(2)}',
+      );
       // Emit immediate impact candidate
       _impactController.add(event);
 
       // Start inactivity confirmation timer
       _startInactivityWait(timestamp);
     } else {
-      _maybeDebugIfEnabled('Sample below impact threshold (m=${magnitude.toStringAsFixed(2)})');
+      _maybeDebugIfEnabled(
+        'Sample below impact threshold (m=${magnitude.toStringAsFixed(2)})',
+      );
     }
   }
 
@@ -147,8 +165,7 @@ class FallDetector {
     _maybeDebug('Cancelled inactivity wait');
   }
 
-  // No motion detected in inactivityWindow, emit confirmed fall.
-  // Emit single friendly confirmed message
+  // No motion detected in inactivityWindow, emit confirmed fall message.
   void _reportFall(DateTime at) {
     _lastFallTime = at;
     // Emit confirmed fall event for other subscribers
