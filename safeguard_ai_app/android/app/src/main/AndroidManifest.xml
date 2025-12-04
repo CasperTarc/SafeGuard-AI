@@ -1,4 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Add microphone permission here -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Optional: allow modifying audio settings if your recorder needs it -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <application
         android:label="safeguard_ai_app"
         android:name="${applicationName}"
