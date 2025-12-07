@@ -1,10 +1,14 @@
 // Manual Trigger
 // Core:
 // Panic Button (Long Press): 5s
-// Shake Detection: 5 shakes within 3s window (threshold > 2.0 m/s^2).
+// Shake Detection: z
+//
+// Updated: stronger haptic pattern in _doFeedback() to make feedback more noticeable.
+
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 typedef ManualTriggerCallback = void Function();
@@ -18,6 +22,10 @@ class ManualTrigger {
   final Duration window; // time window for peaks
   final double baselineAlpha; // smoothing factor for baseline (0..1)
 
+  // Whether the class should play a small haptic feedback when the trigger fires.
+  // Default true. You can pass false if you don't want built-in feedback.
+  final bool enableFeedback;
+
   StreamSubscription<AccelerometerEvent>? _accelSub;
   double _baseline = 9.8; // initial guess for gravity
   bool _aboveThreshold = false;
@@ -29,6 +37,7 @@ class ManualTrigger {
     this.requiredPeaks = 5,
     this.window = const Duration(seconds: 3),
     this.baselineAlpha = 0.1,
+    this.enableFeedback = true,
   });
 
   /// Start listening to accelerometer events for shake detection.
@@ -52,6 +61,7 @@ class ManualTrigger {
   /// Call this if you want to manually fire the trigger (e.g., from long-press logic).
   void fireTrigger() {
     debugPrint('ManualTrigger: manual trigger fired');
+    _doFeedback();
     onTriggered();
   }
 
@@ -75,6 +85,7 @@ class ManualTrigger {
           // Confirmed shake gesture
           debugPrint('ManualTrigger: shake confirmed (peaks=${_peakTimes.length}) -> triggering');
           _peakTimes.clear();
+          _doFeedback();
           onTriggered();
         }
       }
@@ -90,6 +101,30 @@ class ManualTrigger {
   }
 
   double _smv(double x, double y, double z) => math.sqrt(x * x + y * y + z * z);
+
+  // Stronger haptic sequence to make feedback more obvious:
+  // heavyImpact -> short pause -> vibrate -> short pause -> mediumImpact
+  void _doFeedback() {
+    if (!enableFeedback) return;
+    // Run asynchronously so we don't block the caller
+    () async {
+      try {
+        // Heavy impact (most pronounced on many devices)
+        await HapticFeedback.heavyImpact();
+        // short pause
+        await Future.delayed(const Duration(milliseconds: 60));
+        // Generic vibrate (may use device default vibration)
+        HapticFeedback.vibrate();
+        // short pause
+        await Future.delayed(const Duration(milliseconds: 50));
+        // Finish with medium impact
+        await HapticFeedback.mediumImpact();
+      } catch (e) {
+        // Some platforms may not support these calls; ignore errors
+        debugPrint('ManualTrigger feedback error: $e');
+      }
+    }();
+  }
 
   /// Dispose internal subscription if any.
   void dispose() {

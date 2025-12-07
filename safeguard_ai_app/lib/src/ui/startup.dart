@@ -1,14 +1,19 @@
-// Onboarding UI (complete file - v18 final)
-// Full file with all pages and working CustomPainter implementation.
-// Only small responsive hero sizing change applied (see _kHeroWidthFactor / _kMaxHeroImageWidth).
+// Startup / Onboarding flow — full file (complete, no truncation)
+// - Pages: Start, Enable, LongPress, Shake, Done
+// - Responsive wrapper to avoid overflow in landscape
+// - Uses ManualTrigger (lib/src/manual_trigger.dart) and permission helper (lib/src/permission_and_start.dart)
 
 import 'dart:async';
 import 'dart:math' as math;
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-const kBgColor = Color(0xFFF0F0F3);
+import '../manual_trigger.dart';
+import '../permission_and_start.dart';
+import 'home_scaffold.dart';
+
+const kBgColor = Color(0xFFF0F3F6);
 const kTitleColor = Color(0xFF1C2833);
 const kBlue = Color(0xFF0096FB);
 const kBlueEnd = Color(0xFF0064E0);
@@ -16,9 +21,25 @@ const kGrey = Color(0xFF677989);
 const kWhite = Color(0xFFFCFCFD);
 const kCTA = Color(0xFF0064E0);
 
-// ---- HERO IMAGE SIZING (adjustable) ----
-const double _kMaxHeroImageWidth = 520.0; // cap on wide screens
-const double _kHeroWidthFactor = 0.75; // fraction of screen width to use (capped)
+// Slightly larger hero than before but still capped to avoid huge desktop rendering
+const double _kMaxHeroImageWidth = 520.0;
+const double _kHeroWidthFactor = 0.75;
+
+/// Helper that builds a responsive page body which:
+/// - expands to available height
+/// - scrolls when the content doesn't fit (e.g. landscape / small screens)
+Widget responsivePageBody(BuildContext context, Widget child) {
+  return LayoutBuilder(builder: (context, constraints) {
+    final availableHeight = constraints.maxHeight;
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: availableHeight),
+        child: IntrinsicHeight(child: child),
+      ),
+    );
+  });
+}
 
 class OnboardingFlowPage extends StatefulWidget {
   const OnboardingFlowPage({super.key});
@@ -51,7 +72,8 @@ class _OnboardingFlowPageState extends State<OnboardingFlowPage> {
       LongPressPage(onNext: _goNext),
       ShakePage(onNext: _goNext),
       DonePage(onFinish: () {
-        _pc.jumpToPage(0);
+        // Replace onboarding with the HomeScaffold when done
+        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const HomeScaffold()));
       }),
     ];
 
@@ -80,7 +102,7 @@ class _OnboardingFlowPageState extends State<OnboardingFlowPage> {
   }
 }
 
-// ---------------- Start Page ----------------
+// ---------------- Pages ----------------
 
 class StartPage extends StatelessWidget {
   final VoidCallback onNext;
@@ -93,112 +115,125 @@ class StartPage extends StatelessWidget {
     final imageTopOffset = -imageWidth * 0.08;
     final imageRightOffset = -imageWidth * 0.12;
 
-    return Container(
-      color: Colors.transparent,
-      child: Stack(
-        children: [
-          Positioned(
-            top: imageTopOffset,
-            right: imageRightOffset,
-            child: SizedBox(
-              width: imageWidth,
-              child: Image.asset('assets/images/logo_start.png', fit: BoxFit.contain),
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomLeft,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(28, 0, 28, 48),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Aware your',
-                      style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
-                  const SizedBox(height: 6),
-                  Text.rich(
-                    TextSpan(children: [
-                      TextSpan(text: 'Safety ', style: GoogleFonts.poppins(fontSize: 53, fontWeight: FontWeight.w800, color: kBlue)),
-                      TextSpan(text: 'first', style: GoogleFonts.poppins(fontSize: 53, fontWeight: FontWeight.w800, color: kTitleColor)),
-                    ]),
-                  ),
-                  const SizedBox(height: 18),
-                  ElevatedButton(
-                    onPressed: onNext,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: kCTA,
-                      minimumSize: const Size.fromHeight(56),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                      elevation: 0,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text('Get Started', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: kWhite)),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.arrow_forward, size: 18, color: kWhite),
-                      ],
-                    ),
-                  ),
-                ],
+    return responsivePageBody(
+      context,
+      Container(
+        color: Colors.transparent,
+        child: Stack(
+          children: [
+            Positioned(
+              top: imageTopOffset,
+              right: imageRightOffset,
+              child: SizedBox(
+                width: imageWidth,
+                child: Image.asset('assets/images/logo_start.png', fit: BoxFit.contain),
               ),
             ),
-          ),
-        ],
+            Align(
+              alignment: Alignment.bottomLeft,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(28, 0, 28, 48),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Aware your',
+                        style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
+                    const SizedBox(height: 6),
+                    Text.rich(
+                      TextSpan(children: [
+                        TextSpan(text: 'Safety ', style: GoogleFonts.poppins(fontSize: 53, fontWeight: FontWeight.w800, color: kBlue)),
+                        TextSpan(text: 'first', style: GoogleFonts.poppins(fontSize: 53, fontWeight: FontWeight.w800, color: kTitleColor)),
+                      ]),
+                    ),
+                    const SizedBox(height: 18),
+                    ElevatedButton(
+                      onPressed: onNext,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: kCTA,
+                        minimumSize: const Size.fromHeight(56),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                        elevation: 0,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text('Get Started', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: kWhite)),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.arrow_forward, size: 18, color: kWhite),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
-
-// ---------------- Enable Page ----------------
 
 class EnablePage extends StatelessWidget {
   final VoidCallback onNext;
   const EnablePage({required this.onNext, super.key});
 
+  Future<void> _onEnablePressed(BuildContext context) async {
+    final ok = await requestMicrophonePermission();
+    // If permission prompt already accepted previously, the OS dialog won't appear.
+    // We still show a small confirmation and proceed.
+    if (!context.mounted) return;
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission granted')));
+      onNext();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Microphone permission required')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: Colors.transparent,
-      child: Column(
-        children: [
-          const SizedBox(height: 20),
-          Center(child: Image.asset('assets/images/logo_with_text.png', height: 32)),
-          const SizedBox(height: 22),
-          Text.rich(
-            TextSpan(children: [
-              TextSpan(text: 'Automatic ', style: GoogleFonts.poppins(fontSize: 34, fontWeight: FontWeight.bold, color: kBlue)),
-              TextSpan(text: 'it', style: GoogleFonts.poppins(fontSize: 34, fontWeight: FontWeight.bold, color: kTitleColor)),
-            ]),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 8),
-          Text('Clicking below button', style: GoogleFonts.poppins(fontSize: 14, color: kGrey)),
-          const SizedBox(height: 24),
-          Expanded(
-            child: Center(child: Image.asset('assets/images/ear_pic_enable.png', width: 220, fit: BoxFit.contain)),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 28.0, vertical: 28),
-            child: ElevatedButton(
-              onPressed: onNext,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: kCTA,
-                minimumSize: const Size.fromHeight(56),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                elevation: 0,
-              ),
-              child: Text('Enable', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: kWhite)),
+    return responsivePageBody(
+      context,
+      Container(
+        color: Colors.transparent,
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            Center(child: Image.asset('assets/images/logo_with_text.png', height: 32)),
+            const SizedBox(height: 22),
+            Text.rich(
+              TextSpan(children: [
+                TextSpan(text: 'Automatic ', style: GoogleFonts.poppins(fontSize: 34, fontWeight: FontWeight.bold, color: kBlue)),
+                TextSpan(text: 'it', style: GoogleFonts.poppins(fontSize: 34, fontWeight: FontWeight.bold, color: kTitleColor)),
+              ]),
+              textAlign: TextAlign.center,
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            Text('Clicking below button', style: GoogleFonts.poppins(fontSize: 14, color: kGrey)),
+            const SizedBox(height: 24),
+            Expanded(child: Center(child: Image.asset('assets/images/ear_pic_enable.png', width: 220, fit: BoxFit.contain))),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28.0, vertical: 28),
+              child: ElevatedButton(
+                onPressed: () => _onEnablePressed(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: kCTA,
+                  minimumSize: const Size.fromHeight(56),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                  elevation: 0,
+                ),
+                child: Text('Enable', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold, color: kWhite)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
-
-// ---------------- LongPress Page ----------------
 
 class LongPressPage extends StatefulWidget {
   final VoidCallback onNext;
@@ -212,20 +247,30 @@ class _LongPressPageState extends State<LongPressPage> with TickerProviderStateM
   Timer? _timer;
   int _elapsed = 0;
   late AnimationController _ringController;
+  late ManualTrigger _manualTrigger;
 
   @override
   void initState() {
     super.initState();
     _ringController = AnimationController(vsync: this, duration: const Duration(seconds: requiredHoldSeconds));
+    // ManualTrigger: enableFeedback=true so it vibrates when fired
+    _manualTrigger = ManualTrigger(onTriggered: _onManualTriggered);
   }
 
   @override
   void dispose() {
     _timer?.cancel();
     _ringController.dispose();
+    _manualTrigger.dispose();
     super.dispose();
   }
 
+  void _onManualTriggered() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Confirmed')));
+  }
+
+  // Start the hold timer
   void _startHold() {
     _elapsed = 0;
     _ringController.forward(from: 0.0);
@@ -236,11 +281,17 @@ class _LongPressPageState extends State<LongPressPage> with TickerProviderStateM
       });
       if (_elapsed >= requiredHoldSeconds) {
         t.cancel();
-        widget.onNext();
+        // trigger the manual trigger (this will do haptic feedback and call onTriggered)
+        _manualTrigger.fireTrigger();
+        // small delay to allow feedback/show snack before navigation
+        Future.delayed(const Duration(milliseconds: 300), () {
+          widget.onNext();
+        });
       }
     });
   }
 
+  // Cancel the hold timer
   void _cancelHold() {
     _timer?.cancel();
     _ringController.stop();
@@ -249,17 +300,9 @@ class _LongPressPageState extends State<LongPressPage> with TickerProviderStateM
     });
   }
 
-  void _handleTapDown(TapDownDetails details) {
-    _startHold();
-  }
-
-  void _handleTapUp(TapUpDetails details) {
-    _cancelHold();
-  }
-
-  void _handleTapCancel() {
-    _cancelHold();
-  }
+  void _handleTapDown(TapDownDetails details) => _startHold();
+  void _handleTapUp(TapUpDetails details) => _cancelHold();
+  void _handleTapCancel() => _cancelHold();
 
   Widget _buildLayeredBoxes() {
     return SizedBox(
@@ -312,58 +355,59 @@ class _LongPressPageState extends State<LongPressPage> with TickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 28),
-      child: Column(
-        children: [
-          const SizedBox(height: 28),
-          Align(
-            alignment: Alignment.topCenter,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 8.0),
-              child: Image.asset('assets/images/logo_with_text.png', height: 32),
-            ),
-          ),
-          const SizedBox(height: 24),
-          RichText(
-            text: TextSpan(
-              children: [
-                TextSpan(text: 'Long Press ', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kBlue)),
-                TextSpan(text: 'it', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text('Hold in 5s', style: GoogleFonts.poppins(fontSize: 16, color: kGrey)),
-          const SizedBox(height: 28),
-          Expanded(child: Center(child: _buildLayeredBoxes())),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 36.0),
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTapDown: _handleTapDown,
-              onTapUp: _handleTapUp,
-              onTapCancel: _handleTapCancel,
-              child: Container(
-                height: 56,
-                margin: const EdgeInsets.symmetric(horizontal: 60),
-                decoration: BoxDecoration(
-                  color: kCTA,
-                  borderRadius: BorderRadius.circular(28),
-                ),
-                alignment: Alignment.center,
-                child: Text('Hold to confirm', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
+    return responsivePageBody(
+      context,
+      Container(
+        color: Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          children: [
+            const SizedBox(height: 28),
+            Align(
+              alignment: Alignment.topCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Image.asset('assets/images/logo_with_text.png', height: 32),
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 24),
+            RichText(
+              text: TextSpan(
+                children: [
+                  TextSpan(text: 'Long Press ', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kBlue)),
+                  TextSpan(text: 'it', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text('Hold in 5s', style: GoogleFonts.poppins(fontSize: 16, color: kGrey)),
+            const SizedBox(height: 28),
+            Expanded(child: Center(child: _buildLayeredBoxes())),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 36.0),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: _handleTapDown,
+                onTapUp: _handleTapUp,
+                onTapCancel: _handleTapCancel,
+                child: Container(
+                  height: 56,
+                  margin: const EdgeInsets.symmetric(horizontal: 60),
+                  decoration: BoxDecoration(
+                    color: kCTA,
+                    borderRadius: BorderRadius.circular(28),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text('Hold to confirm', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
-
-// ---------------- Ring Painter ----------------
 
 class _RingPainter extends CustomPainter {
   final double progress;
@@ -395,8 +439,6 @@ class _RingPainter extends CustomPainter {
   bool shouldRepaint(covariant _RingPainter old) => old.progress != progress;
 }
 
-// ---------------- Shake Page ----------------
-
 class ShakePage extends StatefulWidget {
   final VoidCallback onNext;
   const ShakePage({required this.onNext, super.key});
@@ -407,76 +449,116 @@ class ShakePage extends StatefulWidget {
 
 class _ShakePageState extends State<ShakePage> {
   bool _listening = false;
+  late ManualTrigger _manualTrigger;
+  String _status = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _manualTrigger = ManualTrigger(onTriggered: _onTriggered);
+  }
+
+  @override
+  void dispose() {
+    _manualTrigger.dispose();
+    super.dispose();
+  }
+
+  void _onTriggered() {
+    // ManualTrigger already runs its own haptic feedback. Add UI side haptic too
+    // to help devices where one source might be suppressed.
+    try {
+      HapticFeedback.mediumImpact();
+    } catch (_) {
+      // ignore if not supported
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _status = 'Shake detected';
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shake detected')));
+  }
+
+  void _toggleListening() {
+    setState(() {
+      _listening = !_listening;
+    });
+    if (_listening) {
+      _manualTrigger.startListening();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Started shake listening')));
+    } else {
+      _manualTrigger.stopListening();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Stopped shake listening')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 28),
-      child: Column(children: [
-        const SizedBox(height: 36),
-        Align(
-          alignment: Alignment.topCenter,
-          child: Padding(
-            padding: const EdgeInsets.only(top: 8.0),
-            child: Image.asset('assets/images/logo_with_text.png', height: 32),
-          ),
-        ),
-        const SizedBox(height: 18),
-        RichText(
-          text: TextSpan(
-            children: [
-              TextSpan(text: 'Shake ', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kBlue)),
-              TextSpan(text: 'it', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text('Start shake listening to enable gesture detection', style: GoogleFonts.poppins(fontSize: 14, color: kGrey), textAlign: TextAlign.center),
-        const SizedBox(height: 36),
-        Expanded(
-          child: Center(
-            child: Container(
-              width: 300,
-              height: 300,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [kBlue.withOpacity(0.15), kBlueEnd.withOpacity(0.15)]),
-                borderRadius: BorderRadius.circular(28),
-              ),
-              child: Center(child: Image.asset('assets/images/shake_pic.png', width: 200)),
+    return responsivePageBody(
+      context,
+      Container(
+        color: Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(children: [
+          const SizedBox(height: 36),
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Image.asset('assets/images/logo_with_text.png', height: 32),
             ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 28.0),
-          child: Column(
-            children: [
-              ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _listening = !_listening;
-                  });
-                },
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: _listening ? kBlueEnd : kCTA, minimumSize: const Size.fromHeight(52)),
-                child: Text(_listening ? 'Stop shake listening' : 'Start shake listening',
-                    style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                onPressed: widget.onNext,
-                style: ElevatedButton.styleFrom(backgroundColor: kCTA, minimumSize: const Size.fromHeight(52)),
-                child: Text('Next', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
-              ),
-            ],
+          const SizedBox(height: 18),
+          RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(text: 'Shake ', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kBlue)),
+                TextSpan(text: 'it to trigger', style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
+              ],
+            ),
           ),
-        )
-      ]),
+          const SizedBox(height: 16),
+          Text('Start shake listening to enable gesture detection', style: GoogleFonts.poppins(fontSize: 14, color: kGrey)),
+          const SizedBox(height: 36),
+          Expanded(
+            child: Center(
+              child: Container(
+                width: 300,
+                height: 300,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [kBlue.withOpacity(0.15), kBlueEnd.withOpacity(0.15)]),
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: Center(child: Image.asset('assets/images/shake_pic.png', width: 200)),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 28.0),
+            child: Column(
+              children: [
+                ElevatedButton(
+                  onPressed: _toggleListening,
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: _listening ? kBlueEnd : kCTA, minimumSize: const Size.fromHeight(52)),
+                  child: Text(_listening ? 'Stop shake listening' : 'Start shake listening',
+                      style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: widget.onNext,
+                  style: ElevatedButton.styleFrom(backgroundColor: kCTA, minimumSize: const Size.fromHeight(52)),
+                  child: Text('Next', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
+                ),
+              ],
+            ),
+          )
+        ]),
+      ),
     );
   }
 }
-
-// ---------------- Done Page ----------------
 
 class DonePage extends StatelessWidget {
   final VoidCallback onFinish;
@@ -487,51 +569,54 @@ class DonePage extends StatelessWidget {
     final screenW = MediaQuery.of(context).size.width;
     final imageWidth = math.min(screenW * _kHeroWidthFactor, _kMaxHeroImageWidth);
 
-    return Container(
-      color: Colors.transparent,
-      child: Stack(
-        children: [
-          Positioned(
-            top: -imageWidth * 0.08,
-            right: -imageWidth * 0.12,
-            child: SizedBox(
-              width: imageWidth,
-              child: Image.asset('assets/images/logo_start.png', fit: BoxFit.contain),
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomLeft,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(28, 0, 28, 80),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Your Safety',
-                      style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
-                  const SizedBox(height: 6),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: screenW * 0.75),
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text('We care now',
-                          style: GoogleFonts.poppins(fontSize: 53, fontWeight: FontWeight.w800, color: kBlue),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  ElevatedButton(
-                    onPressed: onFinish,
-                    style: ElevatedButton.styleFrom(backgroundColor: kCTA, minimumSize: const Size.fromHeight(56)),
-                    child: Text('Launch', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
-                  ),
-                ],
+    return responsivePageBody(
+      context,
+      Container(
+        color: Colors.transparent,
+        child: Stack(
+          children: [
+            Positioned(
+              top: -imageWidth * 0.08,
+              right: -imageWidth * 0.12,
+              child: SizedBox(
+                width: imageWidth,
+                child: Image.asset('assets/images/logo_start.png', fit: BoxFit.contain),
               ),
             ),
-          ),
-        ],
+            Align(
+              alignment: Alignment.bottomLeft,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(28, 0, 28, 80),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Your Safety',
+                        style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, color: kTitleColor)),
+                    const SizedBox(height: 6),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: screenW * 0.75),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text('We care now',
+                            style: GoogleFonts.poppins(fontSize: 53, fontWeight: FontWeight.w800, color: kBlue),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    ElevatedButton(
+                      onPressed: onFinish,
+                      style: ElevatedButton.styleFrom(backgroundColor: kCTA, minimumSize: const Size.fromHeight(56)),
+                      child: Text('Launch', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: kWhite)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

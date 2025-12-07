@@ -85,6 +85,8 @@ flutter:
     - assets/images/logo_with_text.png
     - assets/images/logo_start.png
     - assets/images/linear_back_color.png
+    - assets/images/cancel_pic.png
+    - assets/images/timer_confirmation.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:
