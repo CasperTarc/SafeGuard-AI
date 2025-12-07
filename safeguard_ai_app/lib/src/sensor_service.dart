@@ -34,6 +34,10 @@ class SensorService {
   // Default changed to 0.90 as a balanced starting point (stable baseline, still responsive).
   final double lowPassAlpha;
 
+  // How often the onSample callback should be invoked (milliseconds).
+  // Set to 1000 by default (once per second) to reduce log/UI flood.
+  final int sampleCallbackIntervalMs;
+
   // Debug callbacks
   final SensorDebugCallback? onDebug;
   final SensorSampleCallback? onSample;
@@ -47,6 +51,9 @@ class SensorService {
   double? _smoothedMagnitude;
   bool _running = false;
 
+  // Track last time we invoked onSample to throttle calls to UI/debug listeners.
+  DateTime? _lastSampleCallbackTime;
+
   SensorService({
     required this.fallDetector,
     this.sampleMs = 40,
@@ -54,10 +61,12 @@ class SensorService {
     this.onDebug,
     this.onSample,
     Stream<AccelerometerEvent> Function()? accelerometerStreamFactory,
+    this.sampleCallbackIntervalMs = 1000,
   }) : accelerometerStreamFactory =
-           accelerometerStreamFactory ?? accelerometerEventStream,
-       assert(sampleMs > 0),
-       assert(lowPassAlpha >= 0 && lowPassAlpha <= 1);
+            accelerometerStreamFactory ?? accelerometerEventStream,
+        assert(sampleMs > 0),
+        assert(lowPassAlpha >= 0 && lowPassAlpha <= 1),
+        assert(sampleCallbackIntervalMs >= 0);
 
   bool get isRunning => _running;
 
@@ -67,9 +76,10 @@ class SensorService {
     _running = true;
     _lastSampleTime = null;
     _smoothedMagnitude = null;
+    _lastSampleCallbackTime = null;
 
     onDebug?.call(
-      'SensorService: starting (sampleMs=$sampleMs, lowPassAlpha=$lowPassAlpha, gravityComp=enabled)',
+      'SensorService: starting (sampleMs=$sampleMs, lowPassAlpha=$lowPassAlpha, gravityComp=enabled, callbackIntervalMs=$sampleCallbackIntervalMs)',
     );
 
     // Subscribe to the raw accelerometer stream.
@@ -98,6 +108,7 @@ class SensorService {
     stop();
     _smoothedMagnitude = null;
     _lastSampleTime = null;
+    _lastSampleCallbackTime = null;
   }
 
   void _handleEvent(AccelerometerEvent ev) {
@@ -123,14 +134,19 @@ class SensorService {
     final smoothed = (_smoothedMagnitude == null || lowPassAlpha >= 1.0)
         ? magNoGravity // initialize to current value
         : (lowPassAlpha * _smoothedMagnitude! +
-              (1 - lowPassAlpha) *
-                  magNoGravity); // EMA calculation to give slow motion
+            (1 - lowPassAlpha) * magNoGravity); // EMA calculation to give slow motion
     _smoothedMagnitude =
         smoothed; // stored it back into _smoothedMagnitude for the next sample
 
-    // Forward to onSample callback (debug)
+    // Throttled forward to onSample callback (UI/debug). Calls at most once per sampleCallbackIntervalMs.
     try {
-      onSample?.call(smoothed, now);
+      if (onSample != null) {
+        final shouldCallSample = _shouldCallSampleCallback(now);
+        if (shouldCallSample) {
+          _lastSampleCallbackTime = now;
+          onSample!.call(smoothed, now);
+        }
+      }
     } catch (_) {
       // keep pipeline robust
     }
@@ -141,5 +157,11 @@ class SensorService {
     } catch (e) {
       onDebug?.call('SensorService: error forwarding to FallDetector: $e');
     }
+  }
+
+  bool _shouldCallSampleCallback(DateTime now) {
+    if (_lastSampleCallbackTime == null) return true;
+    final elapsed = now.difference(_lastSampleCallbackTime!).inMilliseconds;
+    return elapsed >= sampleCallbackIntervalMs;
   }
 }

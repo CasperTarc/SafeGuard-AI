@@ -26,8 +26,8 @@ class ImpactEvent {
 
 class FallDetector {
   static const double g = 9.80665;
-  final double impactThreshold; // 2.0g
-  final double inactivityThreshold; // 0.3g
+  final double impactThreshold; // 2.0g by default
+  final double inactivityThreshold; // 0.3g by default
 
   final Duration inactivityWindow; // default 8s
   final Duration minTimeBetweenFalls; // delay between reported falls
@@ -47,7 +47,16 @@ class FallDetector {
   DateTime? _lastFallTime;
   DateTime? _lastImpactTime;
   double _lastImpactPeak = 0.0;
+
   final bool debug;
+
+  // New: throttle interval for frequent debug messages (ms).
+  // Set to 0 to disable throttling (old behaviour).
+  final int debugIntervalMs;
+  DateTime? _lastDebugTime;
+
+  // --- New enabled flag: when false the detector ignores all samples ---
+  bool _enabled = false;
 
   FallDetector({
     double? impactThreshold,
@@ -55,28 +64,49 @@ class FallDetector {
     this.inactivityWindow = const Duration(seconds: 8),
     this.minTimeBetweenFalls = const Duration(seconds: 10),
     this.debug = false,
-  }) : impactThreshold = impactThreshold ?? (2.0 * g),
-       inactivityThreshold = inactivityThreshold ?? (0.3 * g);
+    this.debugIntervalMs = 1000, // default: 1 second between frequent debug emits
+  })  : impactThreshold = impactThreshold ?? (2.0 * g),
+        inactivityThreshold = inactivityThreshold ?? (0.3 * g);
 
   // Streams
   Stream<ImpactEvent> get impactStream => _impactController.stream;
   Stream<DateTime> get fallStream => _fallController.stream;
   Stream<String> get debugStream => _debugController.stream;
 
-  // Format timestamp for debug messages.
+  // Expose enabled state and control methods
+  /// Enable the fall detector. When enabled it will process incoming samples.
+  void enable() {
+    _enabled = true;
+    if (debug) _maybeDebugImmediate('FallDetector: enabled');
+  }
+
+  /// Disable the fall detector. When disabled it will ignore incoming samples.
+  void disable() {
+    _enabled = false;
+    // Cancel any pending inactivity wait to avoid ghost reports
+    _cancelInactivityWait();
+    if (debug) _maybeDebugImmediate('FallDetector: disabled');
+  }
+
+  bool get isEnabled => _enabled;
+
   String _friendlyTimestamp(DateTime dt) {
     final local = dt.toLocal();
     return DateFormat('yyyy-MM-dd EEE h:mma').format(local);
   }
 
-  // Add a new accelerometer magnitude sample for processing.
   void addSample(double magnitude, DateTime timestamp) {
+    // Guard: ignore all samples if detector disabled
+    if (!_enabled) {
+      // For debugging you can optionally emit a low-level message here:
+      // if (debug) _maybeDebugIfEnabled('Sample ignored: detector disabled');
+      return;
+    }
+
     // Debounce: Ignore processing if recently reported fall (to prevent duplicates).
     if (_lastFallTime != null &&
         timestamp.difference(_lastFallTime!).abs() < minTimeBetweenFalls) {
-      _maybeDebug(
-        'Ignored sample: in cooldown (${timestamp.difference(_lastFallTime!).inSeconds}s)',
-      );
+      _maybeDebugImmediate('Ignored sample: in cooldown (${timestamp.difference(_lastFallTime!).inSeconds}s)');
       return;
     }
 
@@ -91,9 +121,7 @@ class FallDetector {
           timestamp: timestamp,
           peakMagnitude: _lastImpactPeak,
         );
-        _maybeDebug(
-          'Impact update: new strong (2nd) spike while awaiting -> peak=${_lastImpactPeak.toStringAsFixed(2)}',
-        );
+        _maybeDebugImmediate('Impact update: new strong (2nd) spike while awaiting -> peak=${_lastImpactPeak.toStringAsFixed(2)}');
         // Emit updated impact candidate
         _impactController.add(event);
 
@@ -104,16 +132,12 @@ class FallDetector {
 
       // If motion resumed above inactivity threshold, cancel confirmation.
       if (magnitude > inactivityThreshold) {
-        _maybeDebug(
-          'Motion resumed (m=${magnitude.toStringAsFixed(2)}), cancelling confirmation',
-        );
+        _maybeDebugImmediate('Motion resumed (m=${magnitude.toStringAsFixed(2)}), cancelling confirmation');
         _cancelInactivityWait();
         return;
       } else {
         // Still below inactivity threshold -> continue waiting.
-        _maybeDebugIfEnabled(
-          'Still inactive (m=${magnitude.toStringAsFixed(2)})',
-        );
+        _maybeDebugIfEnabled('Still inactive (m=${magnitude.toStringAsFixed(2)})');
         return;
       }
     }
@@ -127,22 +151,17 @@ class FallDetector {
         timestamp: timestamp,
         peakMagnitude: _lastImpactPeak,
       );
-      _maybeDebug(
-        'Impact detected: Peak = ${_lastImpactPeak.toStringAsFixed(2)}',
-      );
+      _maybeDebugImmediate('Impact detected: Peak = ${_lastImpactPeak.toStringAsFixed(2)}');
       // Emit immediate impact candidate
       _impactController.add(event);
 
       // Start inactivity confirmation timer
       _startInactivityWait(timestamp);
     } else {
-      _maybeDebugIfEnabled(
-        'Sample below impact threshold (m=${magnitude.toStringAsFixed(2)})',
-      );
+      _maybeDebugIfEnabled('Sample below impact threshold (m=${magnitude.toStringAsFixed(2)})');
     }
   }
 
-  // Start or restart the inactivity confirmation timer.
   void _startInactivityWait(DateTime impactTime) {
     _awaitingInactivity = true;
     _inactivityTimer?.cancel();
@@ -152,20 +171,18 @@ class FallDetector {
       _inactivityTimer = null;
       _lastImpactPeak = 0.0;
     });
-    _maybeDebug('Started inactivity timer (${inactivityWindow.inSeconds}s)');
+    _maybeDebugImmediate('Started inactivity timer (${inactivityWindow.inSeconds}s)');
   }
 
-  // Cancel any pending inactivity confirmation.
   void _cancelInactivityWait() {
     _inactivityTimer?.cancel();
     _inactivityTimer = null;
     _awaitingInactivity = false;
     _lastImpactPeak = 0.0;
     _lastImpactTime = null;
-    _maybeDebug('Cancelled inactivity wait');
+    _maybeDebugImmediate('Cancelled inactivity wait');
   }
 
-  // No motion detected in inactivityWindow, emit confirmed fall message.
   void _reportFall(DateTime at) {
     _lastFallTime = at;
     // Emit confirmed fall event for other subscribers
@@ -174,17 +191,17 @@ class FallDetector {
       final friendly = _friendlyTimestamp(at);
       final msg = '[confirmed] Confirmed fall at $friendly';
       _debugController.add(msg);
+      // mark last debug time so next frequent messages will be throttled
+      _lastDebugTime = DateTime.now();
     }
   }
 
-  // Reset detector internal state
   void reset() {
     _cancelInactivityWait();
     _lastFallTime = null;
-    _maybeDebug('Detector reset');
+    _maybeDebugImmediate('Detector reset');
   }
 
-  // Dispose resources when detector is no longer used.
   void dispose() {
     _inactivityTimer?.cancel();
     _impactController.close();
@@ -192,14 +209,33 @@ class FallDetector {
     _debugController.close();
   }
 
-  // Internal debug helpers
-  void _maybeDebug(String message) {
-    if (debug) {
+  // Emit messages that are considered important and should always go out immediately
+  void _maybeDebugImmediate(String message) {
+    if (!debug) return;
+    try {
       _debugController.add(message);
-    }
+    } catch (_) {}
   }
 
+  // Emit less-critical debug messages at most once per debugIntervalMs
   void _maybeDebugIfEnabled(String message) {
-    if (debug) _maybeDebug(message);
+    if (!debug) return;
+    // If debugIntervalMs is 0, behave like previous (no throttling)
+    if (debugIntervalMs <= 0) {
+      _maybeDebugImmediate(message);
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastDebugTime == null) {
+      _lastDebugTime = now;
+      _maybeDebugImmediate(message);
+      return;
+    }
+    final elapsed = now.difference(_lastDebugTime!).inMilliseconds;
+    if (elapsed >= debugIntervalMs) {
+      _lastDebugTime = now;
+      _maybeDebugImmediate(message);
+    }
+    // otherwise drop the message (throttle)
   }
 }
