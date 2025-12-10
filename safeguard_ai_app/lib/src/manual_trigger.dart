@@ -1,35 +1,30 @@
-// Manual Trigger
-// Core:
-// Panic Button (Long Press): 5s
-// Shake Detection: z
+// url=https://github.com/CasperTarc/SafeGuard-AI/blob/main/safeguard_ai_app/lib/src/manual_trigger.dart
+// ManualTrigger — updated to avoid HapticFeedback when a confirmation/cooldown is active.
 //
-// Updated: stronger haptic pattern in _doFeedback() to make feedback more noticeable.
+// This file listens to accelerometer and detects peaks; when requiredPeaks reached it
+// calls onTriggered(). We avoid performing a haptic impulse inside this class if the
+// global confirmation/cooldown gate is active (so shakes during dialog/cooldown are silent).
 
 import 'dart:async';
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart'; // for debugPrint
 import 'package:flutter/services.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'false_alarm.dart' show isConfirmationActive; // consult global gate
 
 typedef ManualTriggerCallback = void Function();
 
 class ManualTrigger {
   final ManualTriggerCallback onTriggered;
+  final double threshold;
+  final int requiredPeaks;
+  final Duration window;
+  final double baselineAlpha;
 
-  // Shake detection parameters
-  final double threshold; // threshold from baseline to count a peak (m/s^2)
-  final int requiredPeaks; // peaks required in window to confirm shake
-  final Duration window; // time window for peaks
-  final double baselineAlpha; // smoothing factor for baseline (0..1)
-
-  // Whether the class should play a small haptic feedback when the trigger fires.
-  // Default true. You can pass false if you don't want built-in feedback.
-  final bool enableFeedback;
-
-  StreamSubscription<AccelerometerEvent>? _accelSub;
-  double _baseline = 9.8; // initial guess for gravity
-  bool _aboveThreshold = false;
-  final List<DateTime> _peakTimes = [];
+  StreamSubscription<AccelerometerEvent>? _sub;
+  List<double> _recentMags = [];
+  List<DateTime> _recentPeakTimestamps = [];
+  bool _listening = false;
 
   ManualTrigger({
     required this.onTriggered,
@@ -37,97 +32,83 @@ class ManualTrigger {
     this.requiredPeaks = 5,
     this.window = const Duration(seconds: 3),
     this.baselineAlpha = 0.1,
-    this.enableFeedback = true,
   });
 
-  /// Start listening to accelerometer events for shake detection.
   void startListening() {
-    if (_accelSub != null) return;
-    _accelSub = accelerometerEventStream().listen(_handleEvent, onError: (e) {
-      debugPrint('ManualTrigger acc stream error: $e');
-    });
-    debugPrint('ManualTrigger: started listening');
+    if (_listening) return;
+    _listening = true;
+    _sub = accelerometerEvents.listen(_handleEvent);
   }
 
-  /// Stop listening.
   void stopListening() {
-    _accelSub?.cancel();
-    _accelSub = null;
-    _peakTimes.clear();
-    _aboveThreshold = false;
-    debugPrint('ManualTrigger: stopped listening');
+    _sub?.cancel();
+    _sub = null;
+    _listening = false;
+    _recentMags.clear();
+    _recentPeakTimestamps.clear();
   }
 
-  /// Call this if you want to manually fire the trigger (e.g., from long-press logic).
+  void dispose() {
+    stopListening();
+  }
+
+  // Fire the trigger programmatically (used by long-press hold completion).
   void fireTrigger() {
-    debugPrint('ManualTrigger: manual trigger fired');
-    _doFeedback();
+    // If the global confirmation gate is active, don't trigger haptic/notifications here.
+    if (isConfirmationActive()) {
+      // Still call onTriggered so upper layer can handle (it will likely be ignored too).
+      onTriggered();
+      return;
+    }
+
+    // Provide a short haptic feedback to indicate the manual trigger fired (only when allowed).
+    try {
+      HapticFeedback.heavyImpact();
+    } catch (_) {}
+
     onTriggered();
   }
 
-  void _handleEvent(AccelerometerEvent e) {
-    final mag = _smv(e.x, e.y, e.z);
+  void _handleEvent(AccelerometerEvent ev) {
+    // compute magnitude
+    final mag = math.sqrt(ev.x * ev.x + ev.y * ev.y + ev.z * ev.z);
 
-    // Update baseline using exponential smoothing (simple low-pass)
-    _baseline = (1 - baselineAlpha) * _baseline + baselineAlpha * mag;
+    // maintain recent samples for baseline/peak detection (simple approach)
+    if (_recentMags.length > 50) _recentMags.removeAt(0);
+    _recentMags.add(mag);
 
-    final delta = (mag - _baseline).abs();
+    // compute delta from a local baseline (simple low-pass)
+    final baseline = _recentMags.reduce((a, b) => a + b) / _recentMags.length;
+    final delta = (mag - baseline).abs();
 
-    // Peak detection: rising edge of exceeding threshold
-    if (delta > threshold) {
-      if (!_aboveThreshold) {
-        // rising edge -> record a peak time
-        _peakTimes.add(DateTime.now());
-        _aboveThreshold = true;
-        _pruneOldPeaks();
-        debugPrint('ManualTrigger: peak detected (delta=${delta.toStringAsFixed(2)}), peaks=${_peakTimes.length}');
-        if (_peakTimes.length >= requiredPeaks) {
-          // Confirmed shake gesture
-          debugPrint('ManualTrigger: shake confirmed (peaks=${_peakTimes.length}) -> triggering');
-          _peakTimes.clear();
-          _doFeedback();
-          onTriggered();
+    if (delta >= threshold) {
+      final now = DateTime.now();
+      _recentPeakTimestamps.add(now);
+      // remove peaks outside window
+      _recentPeakTimestamps.removeWhere((t) => now.difference(t) > window);
+
+      debugPrint('ManualTrigger: peak detected (delta=${delta.toStringAsFixed(2)}), peaks=${_recentPeakTimestamps.length}');
+
+      if (_recentPeakTimestamps.length >= requiredPeaks) {
+        debugPrint('ManualTrigger: shake confirmed (peaks=${_recentPeakTimestamps.length}) -> triggering');
+
+        // If the global gate is active, do not perform haptic here and allow upper layer to ignore.
+        if (!isConfirmationActive()) {
+          try { HapticFeedback.heavyImpact(); } catch (_) {}
+        } else {
+          debugPrint('ManualTrigger: HAPTIC suppressed due to confirmation/cooldown gate');
         }
+
+        // Call callback
+        try {
+          onTriggered();
+        } catch (e) {
+          debugPrint('ManualTrigger: onTriggered callback error: $e');
+        }
+
+        // Clear peaks to avoid multiple immediate triggers
+        _recentPeakTimestamps.clear();
       }
-    } else {
-      // below threshold
-      _aboveThreshold = false;
     }
-  }
-
-  void _pruneOldPeaks() {
-    final now = DateTime.now();
-    _peakTimes.removeWhere((t) => now.difference(t) > window);
-  }
-
-  double _smv(double x, double y, double z) => math.sqrt(x * x + y * y + z * z);
-
-  // Stronger haptic sequence to make feedback more obvious:
-  // heavyImpact -> short pause -> vibrate -> short pause -> mediumImpact
-  void _doFeedback() {
-    if (!enableFeedback) return;
-    // Run asynchronously so we don't block the caller
-    () async {
-      try {
-        // Heavy impact (most pronounced on many devices)
-        await HapticFeedback.heavyImpact();
-        // short pause
-        await Future.delayed(const Duration(milliseconds: 60));
-        // Generic vibrate (may use device default vibration)
-        HapticFeedback.vibrate();
-        // short pause
-        await Future.delayed(const Duration(milliseconds: 50));
-        // Finish with medium impact
-        await HapticFeedback.mediumImpact();
-      } catch (e) {
-        // Some platforms may not support these calls; ignore errors
-        debugPrint('ManualTrigger feedback error: $e');
-      }
-    }();
-  }
-
-  /// Dispose internal subscription if any.
-  void dispose() {
-    stopListening();
   }
 }

@@ -1,7 +1,5 @@
-// Home page — ManualTrigger always active. Auto Safety toggle controls only automated detectors.
-// Long-press still fires ManualTrigger.fireTrigger() after 5s hold.
-// Change: removed the SnackBar message that warned "Auto Safety is OFF - enable it..." when Auto Safety is OFF.
-// Now the Long Press tap only shows a message when Auto Safety is ON; when OFF it does nothing.
+// Home page — small fix: if InactivityDetector hasn't been created yet (postFrameCallback),
+// fall back to showing the confirmation UI directly so detections don't silently no-op.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -12,8 +10,12 @@ import 'package:google_fonts/google_fonts.dart';
 import '../fall_detector.dart';
 import '../sensor_service.dart';
 import '../manual_trigger.dart';
+import '../scream_detector.dart';
+import '../inactivity_detector.dart';
+import '../false_alarm.dart' show isConfirmationActive; // import gate query
 import 'widgets.dart';
 import 'confirmation.dart'; // provides showConfirmationDialog(...)
+import 'sent.dart'; // provides showSentDialog(...)
 
 class HomePageView extends StatefulWidget {
   const HomePageView({super.key});
@@ -25,16 +27,18 @@ class HomePageView extends StatefulWidget {
 class _HomePageViewState extends State<HomePageView> {
   bool _autoSafety = false;
 
-  // Automated detectors (started only when Auto Safety is ON)
+  // Automated detectors (created in initState, started only when Auto Safety ON)
   late final FallDetector _fallDetector;
   late final SensorService _sensorService;
   StreamSubscription<DateTime>? _fallSub;
   StreamSubscription<String>? _fdDebugSub;
 
-  // ManualTrigger (handles shake detection and manual fire) — ALWAYS listening
-  late final ManualTrigger _manualTrigger;
+  ScreamDetector? _screamDetector;
+  InactivityDetector? _inactivityDetector;
 
-  // Long-press hold logic (5s)
+  late final ManualTrigger _manualTrigger;
+  double? _lastSampleMagnitude;
+
   Timer? _holdTimer;
   final Duration _holdDuration = const Duration(seconds: 5);
   bool _isHolding = false;
@@ -43,21 +47,94 @@ class _HomePageViewState extends State<HomePageView> {
   void initState() {
     super.initState();
 
-    // FallDetector (kept for automated detectors; only started when Auto Safety ON)
     _fallDetector = FallDetector(debug: true);
     _fdDebugSub = _fallDetector.debugStream.listen((m) => debugPrint('[FD] $m'));
     _fallSub = _fallDetector.fallStream.listen((dt) async {
       debugPrint('[FD] FALL CONFIRMED at $dt');
-      try { await HapticFeedback.heavyImpact(); } catch (_) {}
-      if (mounted) {
-        showConfirmationDialog(context);
+
+      // Only vibrate if gate is not active
+      if (!isConfirmationActive()) {
+        try {
+          await HapticFeedback.heavyImpact();
+        } catch (_) {}
+      }
+
+      if (!mounted) return;
+
+      if (_autoSafety) {
+        final baseline = _lastSampleMagnitude ?? 0.0;
+        try {
+          if (_inactivityDetector != null) {
+            _inactivityDetector!.start(reason: 'Possible Danger Detected...', baselineMagnitude: baseline);
+            debugPrint('[UI] InactivityDetector.start fired for fall (baseline=$baseline)');
+          } else {
+            // Fallback: InactivityDetector not yet initialized; show confirmation UI directly
+            debugPrint('[UI] InactivityDetector not initialized yet — showing confirmation directly for fall');
+            showConfirmationDialog(context);
+          }
+        } catch (e) {
+          debugPrint('[UI] Error starting InactivityDetector for fall: $e');
+          showConfirmationDialog(context);
+        }
+      } else {
+        debugPrint('[UI] Auto Safety OFF: ignoring automated fall event');
       }
     });
 
-    // SensorService — created but not started; Auto Safety toggle controls start/stop.
-    _sensor_service_init();
+    _sensorService = SensorService(
+      fallDetector: _fallDetector,
+      sampleMs: 40,
+      lowPassAlpha: 0.90,
+      sampleCallbackIntervalMs: 500,
+      onDebug: (m) => debugPrint('[SS] $m'),
+      onSample: (mag, ts) {
+        _lastSampleMagnitude = mag;
+        if (mag > 1.0) debugPrint('[SS] sample=${mag.toStringAsFixed(2)} at $ts');
+        try {
+          _inactivityDetector?.handleMagnitude(mag);
+        } catch (_) {}
+      },
+    );
 
-    // ManualTrigger: always started so manual long-press and shake work even if Auto Safety is OFF.
+    _screamDetector = ScreamDetector(
+      config: const ScreamDetectorConfig(),
+      onScreamDetected: (evt) async {
+        debugPrint('[SD] Scream detected at ${evt.timestamp} score=${evt.score}');
+
+        // Only vibrate if gate is not active
+        if (!isConfirmationActive()) {
+          try {
+            await HapticFeedback.heavyImpact();
+          } catch (_) {}
+        }
+
+        if (!mounted) return;
+
+        if (_autoSafety) {
+          final baseline = _lastSampleMagnitude ?? 0.0;
+          try {
+            if (_inactivityDetector != null) {
+              _inactivityDetector!.start(reason: 'Possible Danger Detected...', baselineMagnitude: baseline);
+              debugPrint('[UI] InactivityDetector.start fired for scream (baseline=$baseline)');
+            } else {
+              // Fallback: InactivityDetector not yet initialized; show confirmation UI directly
+              debugPrint('[UI] InactivityDetector not initialized yet — showing confirmation directly for scream');
+              showConfirmationDialog(context);
+            }
+          } catch (e) {
+            debugPrint('[UI] Error starting InactivityDetector for scream: $e');
+            showConfirmationDialog(context);
+          }
+        } else {
+          debugPrint('[UI] Auto Safety OFF: ignoring automated scream event');
+        }
+      },
+      onScreamCandidate: (candidate) {
+        debugPrint('[SD] candidate db=${candidate.decibel} @ ${candidate.timestamp}');
+      },
+      onDebug: (m) => debugPrint('[SD] $m'),
+    );
+
     _manualTrigger = ManualTrigger(
       onTriggered: _onManualTriggered,
       threshold: 2.0,
@@ -66,66 +143,117 @@ class _HomePageViewState extends State<HomePageView> {
       baselineAlpha: 0.1,
     );
     _manualTrigger.startListening();
-    debugPrint('[UI] ManualTrigger started (manual long-press + shake available regardless of Auto Safety)');
-  }
+    debugPrint('[UI] ManualTrigger started');
 
-  void _sensor_service_init() {
-    _sensorService = SensorService(
-      fallDetector: _fallDetector,
-      sampleMs: 40,
-      lowPassAlpha: 0.90,
-      sampleCallbackIntervalMs: 1000,
-      onDebug: (m) => debugPrint('[SS] $m'),
-      onSample: (mag, ts) {
-        if (mag > 1.0) debugPrint('[SS] sample=${mag.toStringAsFixed(2)} at $ts');
-      },
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _inactivityDetector = InactivityDetector(
+        context: context,
+        onSendAlert: () {
+          try {
+            showSentDialog(context);
+          } catch (e) {
+            debugPrint('[UI] showSentDialog error: $e');
+          }
+        },
+      );
+    });
   }
 
   @override
   void dispose() {
     _fallSub?.cancel();
     _fdDebugSub?.cancel();
+
     try {
       _sensorService.dispose();
       _fallDetector.dispose();
     } catch (_) {}
+
+    try {
+      _screamDetector?.disable(); // ensure stopped
+      _screamDetector?.dispose();
+    } catch (_) {}
+
+    try {
+      _inactivityDetector?.disable();
+      _inactivityDetector?.dispose();
+    } catch (_) {}
+
     _manualTrigger.dispose();
     _holdTimer?.cancel();
     super.dispose();
   }
 
-  // Called when the manual trigger (shake or long-press) activates
   void _onManualTriggered() async {
     debugPrint('[MT] Manual trigger fired -> _onManualTriggered()');
-    try {
-      await HapticFeedback.heavyImpact();
-    } catch (_) {}
+
+    // If a confirmation is already active, ignore manual triggers to avoid duplicates
+    if (isConfirmationActive()) {
+      debugPrint('[MT] Manual trigger ignored because confirmation already active');
+      return;
+    }
+
+    // Only vibrate if gate not active (double-check)
+    if (!isConfirmationActive()) {
+      try {
+        await HapticFeedback.heavyImpact();
+      } catch (_) {}
+    }
+
     if (!mounted) return;
     showConfirmationDialog(context);
   }
 
-  // Toggle controls only the automated detection components.
-  void _onAutoSafetyToggled(bool enabled) {
+  // Toggle controls automated detection components only.
+  void _onAutoSafetyToggled(bool enabled) async {
     setState(() => _autoSafety = enabled);
+
     if (enabled) {
       try {
         _sensorService.start();
-        debugPrint('[UI] Auto Safety ON: SensorService started (automated detectors running)');
+        _fallDetector.enable();
+        debugPrint('[UI] Auto Safety ON: SensorService started, FallDetector enabled');
       } catch (e) {
-        debugPrint('[UI] Error starting SensorService: $e');
+        debugPrint('[UI] Error starting SensorService / enabling FallDetector: $e');
       }
+
+      try {
+        await _screamDetector?.enable();
+        debugPrint('[UI] Auto Safety ON: ScreamDetector enabled');
+      } catch (e) {
+        debugPrint('[UI] Error enabling ScreamDetector: $e');
+      }
+
+      // Inactivity detector remains created and will be started per-trigger.
+      _inactivityDetector?.enable();
     } else {
+      // STOP automated detectors
       try {
         _sensorService.stop();
-        debugPrint('[UI] Auto Safety OFF: SensorService stopped (automated detectors halted)');
+        _fallDetector.disable();
+        debugPrint('[UI] Auto Safety OFF: SensorService stopped, FallDetector disabled');
       } catch (e) {
-        debugPrint('[UI] Error stopping SensorService: $e');
+        debugPrint('[UI] Error stopping SensorService / disabling FallDetector: $e');
+      }
+
+      try {
+        await _screamDetector?.disable();
+        debugPrint('[UI] Auto Safety OFF: ScreamDetector disabled');
+      } catch (e) {
+        debugPrint('[UI] Error disabling ScreamDetector: $e');
+      }
+
+      // Cancel any pending inactivity windows and disable it
+      try {
+        _inactivityDetector?.disable();
+        debugPrint('[UI] Auto Safety OFF: InactivityDetector disabled and cancelled');
+      } catch (e) {
+        debugPrint('[UI] Error disabling InactivityDetector: $e');
       }
     }
   }
 
-  // Long-press: start hold timer on pointer down (Listener ensures correct pointer events in emulator)
   void _startHold() {
     if (_isHolding) return;
     _isHolding = true;
@@ -142,22 +270,20 @@ class _HomePageViewState extends State<HomePageView> {
     });
   }
 
-  // Cancel hold if user releases early
   void _cancelHold() {
     if (!_isHolding) return;
     _holdTimer?.cancel();
     _holdTimer = null;
     _isHolding = false;
     debugPrint('[UI] Hold cancelled (user released early)');
-    try { HapticFeedback.selectionClick(); } catch (_) {}
+    try {
+      HapticFeedback.selectionClick();
+    } catch (_) {}
   }
 
-  // Long Press button tap: show guidance ONLY when Auto Safety is ON.
-  // If Auto Safety is OFF, do nothing (user asked to remove the OFF message).
   void _onLongPressButtonTap() {
-    if (!_autoSafety) return;
-    final msg = 'Auto Safety is ON — automatic detection will run while the app is foregrounded.';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+    // Removed SnackBar message: short tap does nothing now.
+    // Long-press hold still triggers the manual trigger after _holdDuration.
   }
 
   @override
@@ -246,13 +372,12 @@ class _HomePageViewState extends State<HomePageView> {
 
             SizedBox(height: heroVerticalPadding),
 
-            // Long Press button — use Listener for low-level pointer events (hold) and tap for guidance
+            // Long Press button
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 28.0, vertical: 8),
               child: Listener(
                 onPointerDown: (_) => _startHold(),
                 onPointerUp: (_) {
-                  // If it was a short tap, show guidance; if released after hold completion _isHolding=false already.
                   if (_isHolding) _cancelHold();
                 },
                 onPointerCancel: (_) => _cancelHold(),
