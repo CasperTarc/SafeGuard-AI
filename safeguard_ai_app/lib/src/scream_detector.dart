@@ -1,17 +1,7 @@
-// ScreamDetector
-// Core:
-// 1. Microphone permission & capture of audio frames/windows (1s @ 16 kHz).
-// 2. Lightweight pre-filter (dB) and buffering of recent samples.
-// 3. Calling capturePcmCallback to obtain raw PCM for model confirmation.
-// 4. Decision logic: combined rule (prefilter + modelThreshold), cooldown and consecutive-window logic.
-//
-// Notes:
-// - Require permission to access microphone.
-// - MFCC / heavy DSP is NOT performed here, it performed at scream_inference.dart.
-//
-// Research:
-// - Human Scream: ~85 decibels (dB)
-// - But in our logic, we use a prefilter threshold of 70 dB to catch more potential screams
+// ScreamDetector (patched)
+// - Adds enable()/disable() and an internal _enabled flag so Home can reliably
+//   stop the detector and ensure no further processing occurs when disabled.
+// - start()/stop() behavior preserved; enable() calls start() and disable() calls stop().
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -38,9 +28,6 @@ class ScreamCandidate {
   ScreamCandidate({required this.timestamp, required this.decibel, this.temporaryClipPath});
 }
 
-/// Runtime configuration for the detector.
-///
-/// Note: triggerDb default changed to 70.0 (recommended starting point).
 class ScreamDetectorConfig {
   final double triggerDb; // dB prefilter threshold
   final int clipPreMs;
@@ -49,7 +36,7 @@ class ScreamDetectorConfig {
   final bool saveClipOnDetect;
 
   const ScreamDetectorConfig({
-    this.triggerDb = 70.0, // CHANGED: default 70 dB to improve recall
+    this.triggerDb = 70.0,
     this.clipPreMs = 500,
     this.clipPostMs = 1500,
     this.samplePeriodMs = 50,
@@ -63,9 +50,6 @@ typedef OnDebugCallback = void Function(String message);
 typedef CapturePcmCallback = Future<List<int>?> Function(); // return 1s int16 PCM, mono
 
 /// ScreamDetector: combines loudness prefilter with optional model confirmation (AI).
-/// Default behavior: when decibel >= triggerDb, capture 1s PCM via capturePcmCallback (if provided),
-/// call model.predictFromInt16(pcm) and require model score >= modelThreshold to confirm.
-/// Additional features: consecutive confirmations, cooldown to avoid repeated alerts.
 class ScreamDetector {
   final ScreamDetectorConfig config;
   final OnScreamDetected onScreamDetected;
@@ -92,6 +76,9 @@ class ScreamDetector {
   DateTime? _lastConfirmedAt;
   bool _confirming = false;
 
+  // New: enabled flag so callers can disable the detector without disposing it
+  bool _enabled = false;
+
   ScreamDetector({
     required this.config,
     required this.onScreamDetected,
@@ -100,13 +87,32 @@ class ScreamDetector {
     this.model,
     this.modelThreshold = 0.20,
     this.capturePcmCallback,
-    this.consecutiveRequired = 1, // default: one confirmed window needed
-    this.cooldownMs = 5000, // default 5 seconds cooldown
+    this.consecutiveRequired = 1,
+    this.cooldownMs = 5000,
   });
 
   String _fmtTs(DateTime dt) => DateFormat('yyyy-MM-dd HH:mm:ss').format(dt.toLocal());
 
+  /// Enable the detector (calls start).
+  /// This requests microphone permission and begins listening.
+  Future<void> enable() async {
+    if (_enabled) return;
+    _enabled = true;
+    await start();
+  }
+
+  /// Disable the detector (calls stop) and prevent further processing.
+  Future<void> disable() async {
+    if (!_enabled) return;
+    _enabled = false;
+    await stop();
+  }
+
   Future<void> start() async {
+    if (!_enabled) {
+      // If caller called start without enabling we enable implicitly.
+      _enabled = true;
+    }
     if (_running) return;
     _log('ScreamDetector.start()');
 
@@ -131,12 +137,19 @@ class ScreamDetector {
   }
 
   Future<void> stop() async {
-    if (!_running) return;
+    if (!_running && _noiseSubscription == null) {
+      _running = false;
+      return;
+    }
     _log('ScreamDetector.stop()');
-    await _noiseSubscription?.cancel();
+    try {
+      await _noiseSubscription?.cancel();
+    } catch (_) {}
     _noiseSubscription = null;
     _noiseMeter = null;
     _running = false;
+    _confirming = false;
+    _consecutiveCount = 0;
   }
 
   void dispose() {
@@ -149,6 +162,9 @@ class ScreamDetector {
 
   // Called for each NoiseReading from the NoiseMeter stream.
   void _onNoiseReading(NoiseReading reading) async {
+    // Defensive: ignore readings when disabled
+    if (!_enabled) return;
+
     final ts = DateTime.now();
     final double db = reading.meanDecibel ?? reading.maxDecibel ?? 0.0;
 
