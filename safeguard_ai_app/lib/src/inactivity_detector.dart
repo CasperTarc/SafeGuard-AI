@@ -1,6 +1,4 @@
 // InactivityDetector — delegates confirmation UI to the shared helper showConfirmationDialog(...)
-// so appearance is identical across manual, shake, fall, scream and inactivity.
-// Keeps inactivity countdown / movement detection behavior intact.
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -46,7 +44,8 @@ class InactivityDetector {
   bool get hasActiveWindowOrConfirmation => _inInactivityWindow || isConfirmationActive();
 
   // Start the inactivity countdown.
-  void start({required String reason, required double baselineMagnitude}) {
+  // onComplete is called after the confirmation dialog flow completes (sent/cancelled/timeout)
+  void start({required String reason, required double baselineMagnitude, VoidCallback? onComplete}) {
     if (!_enabled) {
       debugPrint('InactivityDetector.start ignored: detector disabled');
       return;
@@ -70,18 +69,53 @@ class InactivityDetector {
       // If global confirmation gate active (visible or cooldown), skip
       if (isConfirmationActive()) {
         debugPrint('InactivityDetector: suppressed confirmation since global gate active');
+        onComplete?.call();
         return;
       }
 
       // Show the shared confirmation dialog UI. That helper manages gate + cooldown and routes
       // the result to Cancel / Sent overlays, so we only need to call it here.
       try {
-        await showConfirmationDialog(context, seconds: confirmationDuration.inSeconds);
-        // showConfirmationDialog will show Cancel/Sent overlays as appropriate.
+        await showConfirmationDialog(
+          context,
+          seconds: confirmationDuration.inSeconds,
+          alertType: 'inactivity',
+          trigger: 'auto',
+        );
       } catch (e) {
         debugPrint('InactivityDetector: error showing shared confirmation UI: $e');
+      } finally {
+        // Notify caller that the inactivity window / confirmation flow is complete.
+        try {
+          onComplete?.call();
+        } catch (_) {}
       }
     });
+  }
+
+  // Immediate confirmation (used by FalseAlarmManager for core emergencies and fallbacks)
+  Future<void> showImmediateConfirmation(String title, {String alertType = 'inactivity', String trigger = 'auto'}) async {
+    if (!_enabled) {
+      debugPrint('InactivityDetector.showImmediateConfirmation ignored: detector disabled');
+      return;
+    }
+
+    if (hasActiveWindowOrConfirmation) {
+      debugPrint('InactivityDetector.showImmediateConfirmation suppressed: active window/confirmation present');
+      return;
+    }
+
+    try {
+      await showConfirmationDialog(
+        context,
+        seconds: confirmationDuration.inSeconds,
+        alertType: alertType,
+        trigger: trigger,
+      );
+    } catch (e) {
+      debugPrint('InactivityDetector.showImmediateConfirmation: error showing dialog: $e');
+      rethrow;
+    }
   }
 
   // Cancel the inactivity countdown, since movement was detected.
@@ -94,34 +128,19 @@ class InactivityDetector {
   // Call this on accelerometer magnitude updates.
   void handleMagnitude(double magnitude) {
     if (!_inInactivityWindow) return;
+
+    // Compare movement to baseline; if movement exceeds the threshold, cancel the inactivity window.
     final delta = (magnitude - _movementBaseline).abs();
     if (delta > movementThreshold) {
-      cancel('Movement detected (delta=${delta.toStringAsFixed(3)})');
+      debugPrint('InactivityDetector: movement detected (delta=${delta.toStringAsFixed(3)}) -> cancelling inactivity window');
+      cancel('movement detected (delta=${delta.toStringAsFixed(3)})');
     }
   }
 
-  // Show 10s confirmation popup immediately (use for core emergency).
-  Future<void> showImmediateConfirmation(String title) async {
-    // If gate active, do not show another confirmation
-    if (isConfirmationActive()) {
-      debugPrint('InactivityDetector.showImmediateConfirmation ignored: confirmation already active or cooldown');
-      return;
-    }
-
-    // Cancel any inactivity timer
-    _inactivityTimer?.cancel();
-    _inInactivityWindow = false;
-
-    // Show the shared confirmation UI (it handles gate/cooldown and routing to sent/cancel).
-    try {
-      await showConfirmationDialog(context, seconds: confirmationDuration.inSeconds);
-    } catch (e) {
-      debugPrint('InactivityDetector: error showing shared immediate confirmation: $e');
-    }
-  }
-
-  /// Dispose timers.
+  /// Dispose helper to cancel timers when the detector is no longer needed.
   void dispose() {
     _inactivityTimer?.cancel();
+    _inInactivityWindow = false;
+    debugPrint('InactivityDetector: disposed');
   }
 }

@@ -1,13 +1,4 @@
-// url=https://github.com/CasperTarc/SafeGuard-AI/blob/main/safeguard_ai_app/lib/src/false_alarm.dart
 // FalseAlarm Manager — global confirmation gate + cooldown
-//
-// - isConfirmationActive() returns true while a confirmation dialog is visible OR
-//   while a post-confirmation cooldown is still running.
-// - Use startConfirmation() before showing a confirmation dialog, and call
-//   endConfirmationAndStartCooldown() after the dialog completes (so the cooldown starts).
-//
-// FalseAlarmManager uses inactivityDetector.showImmediateConfirmation / start(...) as before,
-// but now checks isConfirmationActive() to avoid scheduling/showing duplicates.
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -18,8 +9,6 @@ bool _globalConfirmationVisible = false;
 DateTime? _globalConfirmationCooldownUntil;
 Duration _globalConfirmationCooldownDuration = const Duration(seconds: 10);
 
-/// Returns true if a confirmation is currently visible OR the cooldown period after
-/// a confirmation has not yet expired.
 bool isConfirmationActive() {
   if (_globalConfirmationVisible) return true;
   final until = _globalConfirmationCooldownUntil;
@@ -27,15 +16,12 @@ bool isConfirmationActive() {
   return DateTime.now().isBefore(until);
 }
 
-/// Mark that the app is entering a confirmation (dialog is about to show).
 void startConfirmation() {
   _globalConfirmationVisible = true;
   _globalConfirmationCooldownUntil = null;
   debugPrint('Global confirmation: START (visible=true)');
 }
 
-/// Mark that confirmation ended and start the cooldown timer. If `cooldown` is provided,
-/// use it; otherwise default to _globalConfirmationCooldownDuration.
 void endConfirmationAndStartCooldown([Duration? cooldown]) {
   _globalConfirmationVisible = false;
   final d = cooldown ?? _globalConfirmationCooldownDuration;
@@ -43,7 +29,6 @@ void endConfirmationAndStartCooldown([Duration? cooldown]) {
   debugPrint('Global confirmation: END -> cooldown until $_globalConfirmationCooldownUntil');
 }
 
-/// Optionally set global cooldown duration (if you want to change it at runtime)
 void setGlobalConfirmationCooldownDuration(Duration d) {
   _globalConfirmationCooldownDuration = d;
   debugPrint('Global confirmation: cooldown duration set to $d');
@@ -68,15 +53,14 @@ class FalseAlarmManager {
   });
 
   // Internal helper: schedule immediate confirmation via inactivityDetector
-  // InactivityDetector.showImmediateConfirmation will call startConfirmation()/endConfirmationAndStartCooldown
-  Future<void> _scheduleImmediateConfirmation(String title) async {
+  Future<void> _scheduleImmediateConfirmation(String title, {String alertType = 'inactivity', String trigger = 'auto'}) async {
     if (isConfirmationActive() || inactivityDetector.hasActiveWindowOrConfirmation) {
       debugPrint('FalseAlarmManager: suppressing immediate confirmation; gate/window active');
       return;
     }
 
     try {
-      await inactivityDetector.showImmediateConfirmation(title);
+      await inactivityDetector.showImmediateConfirmation(title, alertType: alertType, trigger: trigger);
     } catch (e) {
       debugPrint('FalseAlarmManager: error showing immediate confirmation: $e');
       // fallback: try to call onSendAlert directly
@@ -105,7 +89,7 @@ class FalseAlarmManager {
       final lastScream = _screamTimes.last;
       if (now.difference(lastScream).abs() <= correlationWindow) {
         debugPrint('FalseAlarmManager: core emergency (fall + recent scream)');
-        _scheduleImmediateConfirmation('Core emergency (fall + scream)');
+        _scheduleImmediateConfirmation('Core emergency (fall + scream)', alertType: 'fall', trigger: 'auto');
         return;
       }
     }
@@ -113,12 +97,20 @@ class FalseAlarmManager {
     // Otherwise start inactivity countdown
     _hasScheduledInactivityWindow = true;
     try {
-      inactivityDetector.start(reason: 'Fall detected', baselineMagnitude: baselineMagnitude);
+      inactivityDetector.start(
+        reason: 'Fall detected',
+        baselineMagnitude: baselineMagnitude,
+        onComplete: () {
+          // Reset scheduled flag after inactivity window + confirmation flow completes.
+          _hasScheduledInactivityWindow = false;
+          debugPrint('FalseAlarmManager: inactivity window completed (fall) — _hasScheduledInactivityWindow cleared');
+        },
+      );
       debugPrint('FalseAlarmManager: scheduled inactivity window for fall');
     } catch (e) {
       debugPrint('FalseAlarmManager: failed to start inactivity detector for fall: $e — scheduling immediate confirmation');
       _hasScheduledInactivityWindow = false;
-      _scheduleImmediateConfirmation('Possible Danger Detected...');
+      _scheduleImmediateConfirmation('Possible Danger Detected...', alertType: 'fall', trigger: 'auto');
     }
   }
 
@@ -140,26 +132,33 @@ class FalseAlarmManager {
     if (_lastFallTime != null) {
       if (now.difference(_lastFallTime!).abs() <= correlationWindow) {
         debugPrint('FalseAlarmManager: core emergency (scream + recent fall)');
-        _scheduleImmediateConfirmation('Core emergency (fall + scream)');
+        _scheduleImmediateConfirmation('Core emergency (fall + scream)', alertType: 'scream', trigger: 'auto');
         return;
       }
     }
 
     if (_screamTimes.length >= 2) {
       debugPrint('FalseAlarmManager: multiple screams within window -> immediate confirmation');
-      _scheduleImmediateConfirmation('Multiple screams detected');
+      _scheduleImmediateConfirmation('Multiple screams detected', alertType: 'scream', trigger: 'auto');
       return;
     }
 
     // Single scream -> inactivity countdown
     _hasScheduledInactivityWindow = true;
     try {
-      inactivityDetector.start(reason: 'Single scream detected', baselineMagnitude: baselineMagnitude);
+      inactivityDetector.start(
+        reason: 'Single scream detected',
+        baselineMagnitude: baselineMagnitude,
+        onComplete: () {
+          _hasScheduledInactivityWindow = false;
+          debugPrint('FalseAlarmManager: inactivity window completed (scream) — _hasScheduledInactivityWindow cleared');
+        },
+      );
       debugPrint('FalseAlarmManager: scheduled inactivity window for single scream');
     } catch (e) {
       debugPrint('FalseAlarmManager: failed to start inactivity detector for scream: $e — scheduling immediate confirmation');
       _hasScheduledInactivityWindow = false;
-      _scheduleImmediateConfirmation('Possible Danger Detected...');
+      _scheduleImmediateConfirmation('Possible Danger Detected...', alertType: 'scream', trigger: 'auto');
     }
   }
 
@@ -174,9 +173,8 @@ class FalseAlarmManager {
     _hasScheduledInactivityWindow = false;
   }
 
-  /// Inform the manager that a confirmation dialog has ended (so future triggers may schedule again).
-  /// InactivityDetector already calls endConfirmationAndStartCooldown so this is only needed if
-  /// you want FalseAlarmManager to reset its internal scheduled flag from elsewhere.
+  /// Inform the manager that a confirmation dialog has ended (not used now because we
+  /// clear the flag via the onComplete callback).
   void notifyConfirmationHidden() {
     _hasScheduledInactivityWindow = false;
   }

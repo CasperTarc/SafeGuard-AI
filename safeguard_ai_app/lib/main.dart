@@ -1,14 +1,12 @@
-// Main entry — register routes that map to actual classes (CancelPageView is defined in cancel.dart).
-// Sent and confirmation are presented as overlays (showSentDialog/showConfirmationDialog), so they
-// are not registered as named routes here.
-
 import 'package:flutter/material.dart';
-import 'src/ui/home_scaffold.dart';
-import 'src/ui/cancel.dart'; // provides CancelPageView + showCancelDialog
-import 'src/ui/confirmation.dart'; // provides showConfirmationDialog()
+import 'package:firebase_core/firebase_core.dart';
 
-void main() {
+import 'src/ui/home_scaffold.dart';
+import 'src/ui/cancel.dart';
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   runApp(const SafeGuardUIApp());
 }
 
