@@ -43,6 +43,8 @@ dependencies:
   tflite_flutter: ^0.12.1
   record: ^6.1.2
   google_fonts: ^6.3.0
+  firebase_core: ^4.2.1
+  cloud_firestore: ^6.1.0
 
 dev_dependencies:
   flutter_test:

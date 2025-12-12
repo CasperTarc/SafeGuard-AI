@@ -1,14 +1,10 @@
 // Confirmation overlay — ensures a single dialog + cooldown across the app.
-// Changes in this version:
-// - Play a stronger multi-pulse haptic when the confirmation dialog appears.
-// - Route TIMEOUT ('auto') and null results to the Cancel overlay (cancel.dart).
-//   'send' still routes to the Sent overlay (sent.dart).
+// This version: fire-and-forget Firestore logging (so UI routing is immediate).
+// Important: pass the correct alertType and trigger from callers.
 //
-// Notes:
-// - Haptics are played only when the confirmation actually shows and the global
-//   gate is not already active (startConfirmation() called).
-// - The global gate/cooldown still prevents other haptics while the dialog is visible
-//   and during the post-confirmation cooldown.
+// - For automatic detectors, call with alertType 'scream' | 'fall' | 'inactivity' and trigger 'auto'.
+// - For manual triggers, call with alertType 'long_press' | 'shake' (or similar) and trigger 'manual'.
+// - The helper stores `type` exactly as given, and `trigger` as 'auto' or 'manual'.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -17,40 +13,38 @@ import 'package:flutter/services.dart'; // for HapticFeedback
 import 'package:google_fonts/google_fonts.dart';
 
 import '../false_alarm.dart'; // startConfirmation(), endConfirmationAndStartCooldown(), isConfirmationActive()
+import '../firebase_alerts.dart'; // writeAlertToFirestore(...)
 import 'widgets.dart';
 import 'cancel.dart'; // showCancelDialog(...)
 import 'sent.dart'; // showSentDialog(...)
 
-// Play a short sequence of haptic pulses to increase perceived intensity.
-// Uses small delays between pulses to produce a stronger sensation on devices.
 Future<void> _playEntryHapticPattern() async {
   try {
-    // Primary strong pulse
     await HapticFeedback.heavyImpact();
-    // small spacing -> secondary pulse
     await Future.delayed(const Duration(milliseconds: 120));
     await HapticFeedback.mediumImpact();
-    // optional third short pulse for devices that need it
     await Future.delayed(const Duration(milliseconds: 120));
     await HapticFeedback.lightImpact();
   } catch (_) {
-    // ignore platform exceptions (some devices / platforms won't support specific haptics)
+    // ignore
   }
 }
 
-Future<void> showConfirmationDialog(BuildContext context, {int seconds = 10}) async {
-  // Prevent showing duplicate confirmation dialogs or during cooldown
+/// Show the confirmation overlay and log the final outcome to Firestore (non-blocking).
+/// - [alertType] should describe the event (fall/scream/inactivity or manual methods).
+/// - [trigger] should be 'auto' or 'manual'.
+Future<void> showConfirmationDialog(
+  BuildContext context, {
+  int seconds = 10,
+  String alertType = 'manual',
+  String trigger = 'manual',
+}) async {
   if (isConfirmationActive()) {
     debugPrint('showConfirmationDialog suppressed because gate/cooldown active');
     return;
   }
 
-  // Mark global confirmation active (visible)
   startConfirmation();
-
-  // Play entry haptic pattern (non-blocking for UI responsiveness).
-  // We await it to sequence pulses, but it's quick; if you prefer fully fire-and-forget
-  // you can call without await.
   _playEntryHapticPattern();
 
   String? result;
@@ -59,7 +53,6 @@ Future<void> showConfirmationDialog(BuildContext context, {int seconds = 10}) as
     const double overlayOpacity = 0.75;
     final barrierColor = overlayBase.withOpacity(overlayOpacity);
 
-    // Await the dialog result (returned via Navigator.pop in the overlay body)
     result = await showGeneralDialog<String>(
       context: context,
       barrierDismissible: false,
@@ -75,13 +68,22 @@ Future<void> showConfirmationDialog(BuildContext context, {int seconds = 10}) as
       },
     );
   } finally {
-    // When the dialog finishes, start the post-confirmation cooldown (default 10s).
     endConfirmationAndStartCooldown();
   }
 
-  // Route the result:
-  // - 'cancelled' or 'auto' or null -> Cancel overlay
-  // - 'send' -> Sent overlay
+  final String outcome =
+      (result == 'send') ? 'sent' : (result == 'cancelled') ? 'cancelled' : 'timeout';
+
+  // Fire-and-forget: ensure overlays show immediately, but log the event in background.
+  writeAlertToFirestore(
+    type: alertType,
+    trigger: trigger,
+    outcome: outcome,
+  ).catchError((e, st) {
+    debugPrint('showConfirmationDialog: firestore write failed: $e\n$st');
+  });
+
+  // Route to UI overlays as before
   if (result == 'send') {
     try {
       await showSentDialog(context);
@@ -89,7 +91,6 @@ Future<void> showConfirmationDialog(BuildContext context, {int seconds = 10}) as
       debugPrint('showConfirmationDialog: failed to show Sent overlay: $e');
     }
   } else {
-    // treat 'cancelled', 'auto', or null as cancel
     try {
       await showCancelDialog(context);
     } catch (e) {

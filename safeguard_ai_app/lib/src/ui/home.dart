@@ -1,5 +1,5 @@
-// Home page — small fix: if InactivityDetector hasn't been created yet (postFrameCallback),
-// fall back to showing the confirmation UI directly so detections don't silently no-op.
+// Home page — updated to enable/disable shake detection when Auto Safety toggles.
+// Long-press manual trigger remains enabled regardless.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -68,13 +68,13 @@ class _HomePageViewState extends State<HomePageView> {
             _inactivityDetector!.start(reason: 'Possible Danger Detected...', baselineMagnitude: baseline);
             debugPrint('[UI] InactivityDetector.start fired for fall (baseline=$baseline)');
           } else {
-            // Fallback: InactivityDetector not yet initialized; show confirmation UI directly
+            // Fallback: InactivityDetector not yet initialized; show confirmation UI directly for fall
             debugPrint('[UI] InactivityDetector not initialized yet — showing confirmation directly for fall');
-            showConfirmationDialog(context);
+            showConfirmationDialog(context, seconds: 10, alertType: 'fall', trigger: 'auto');
           }
         } catch (e) {
           debugPrint('[UI] Error starting InactivityDetector for fall: $e');
-          showConfirmationDialog(context);
+          showConfirmationDialog(context, seconds: 10, alertType: 'fall', trigger: 'auto');
         }
       } else {
         debugPrint('[UI] Auto Safety OFF: ignoring automated fall event');
@@ -117,13 +117,13 @@ class _HomePageViewState extends State<HomePageView> {
               _inactivityDetector!.start(reason: 'Possible Danger Detected...', baselineMagnitude: baseline);
               debugPrint('[UI] InactivityDetector.start fired for scream (baseline=$baseline)');
             } else {
-              // Fallback: InactivityDetector not yet initialized; show confirmation UI directly
+              // Fallback: InactivityDetector not yet initialized; show confirmation UI directly for scream
               debugPrint('[UI] InactivityDetector not initialized yet — showing confirmation directly for scream');
-              showConfirmationDialog(context);
+              showConfirmationDialog(context, seconds: 10, alertType: 'scream', trigger: 'auto');
             }
           } catch (e) {
             debugPrint('[UI] Error starting InactivityDetector for scream: $e');
-            showConfirmationDialog(context);
+            showConfirmationDialog(context, seconds: 10, alertType: 'scream', trigger: 'auto');
           }
         } else {
           debugPrint('[UI] Auto Safety OFF: ignoring automated scream event');
@@ -135,15 +135,20 @@ class _HomePageViewState extends State<HomePageView> {
       onDebug: (m) => debugPrint('[SD] $m'),
     );
 
-    _manualTrigger = ManualTrigger(
-      onTriggered: _onManualTriggered,
-      threshold: 2.0,
-      requiredPeaks: 5,
-      window: const Duration(seconds: 3),
-      baselineAlpha: 0.1,
-    );
+  // When creating the ManualTrigger in initState:
+  _manualTrigger = ManualTrigger(
+    onTriggered: (method) => _onManualTriggered(method),
+    threshold: 2.0,
+    requiredPeaks: 5,
+    window: const Duration(seconds: 3),
+    baselineAlpha: 0.1,
+  );
+
+    // Start listening for shake events, but enable/disable shake detection according to _autoSafety.
     _manualTrigger.startListening();
-    debugPrint('[UI] ManualTrigger started');
+    // Ensure shake detection is disabled when auto safety is ON (initially _autoSafety=false so enabled).
+    _manualTrigger.setShakeEnabled(!_autoSafety);
+    debugPrint('[UI] ManualTrigger started (shakeEnabled=${_manualTrigger.isShakeEnabled})');
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -185,8 +190,12 @@ class _HomePageViewState extends State<HomePageView> {
     super.dispose();
   }
 
-  void _onManualTriggered() async {
-    debugPrint('[MT] Manual trigger fired -> _onManualTriggered()');
+  // Fire the trigger programmatically (long-press) uses ManualTrigger.fireTrigger()
+  // which now calls onTriggered('long_press').
+
+  // _onManualTriggered updated signature:
+  void _onManualTriggered(String method) async {
+    debugPrint('[MT] Manual trigger fired -> _onManualTriggered(method=$method)');
 
     // If a confirmation is already active, ignore manual triggers to avoid duplicates
     if (isConfirmationActive()) {
@@ -202,12 +211,19 @@ class _HomePageViewState extends State<HomePageView> {
     }
 
     if (!mounted) return;
-    showConfirmationDialog(context);
+
+    // method will be 'long_press' or 'shake' — pass it straight to confirmation dialog.
+    showConfirmationDialog(context, seconds: 10, alertType: method, trigger: 'manual');
   }
 
   // Toggle controls automated detection components only.
   void _onAutoSafetyToggled(bool enabled) async {
     setState(() => _autoSafety = enabled);
+
+    // Enable / disable shake detection when auto safety toggles:
+    // - Auto Safety ON  => disable shake (so shakes won't interrupt automated tests)
+    // - Auto Safety OFF => enable shake
+    _manualTrigger.setShakeEnabled(!enabled);
 
     if (enabled) {
       try {

@@ -1,9 +1,5 @@
-// url=https://github.com/CasperTarc/SafeGuard-AI/blob/main/safeguard_ai_app/lib/src/manual_trigger.dart
-// ManualTrigger — updated to avoid HapticFeedback when a confirmation/cooldown is active.
-//
-// This file listens to accelerometer and detects peaks; when requiredPeaks reached it
-// calls onTriggered(). We avoid performing a haptic impulse inside this class if the
-// global confirmation/cooldown gate is active (so shakes during dialog/cooldown are silent).
+// ManualTrigger — updated to allow runtime enabling/disabling of shake detection,
+// and to call the callback with the method string ('shake' or 'long_press').
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -12,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'false_alarm.dart' show isConfirmationActive; // consult global gate
 
-typedef ManualTriggerCallback = void Function();
+typedef ManualTriggerCallback = void Function(String method);
 
 class ManualTrigger {
   final ManualTriggerCallback onTriggered;
@@ -26,6 +22,9 @@ class ManualTrigger {
   List<DateTime> _recentPeakTimestamps = [];
   bool _listening = false;
 
+  // When false, ignore accelerometer events (shake detection disabled).
+  bool _shakeEnabled = true;
+
   ManualTrigger({
     required this.onTriggered,
     this.threshold = 2.0,
@@ -33,6 +32,14 @@ class ManualTrigger {
     this.window = const Duration(seconds: 3),
     this.baselineAlpha = 0.1,
   });
+
+  /// Enable/disable shake detection at runtime.
+  void setShakeEnabled(bool enabled) {
+    _shakeEnabled = enabled;
+    debugPrint('ManualTrigger: shake detection ${enabled ? 'ENABLED' : 'DISABLED'}');
+  }
+
+  bool get isShakeEnabled => _shakeEnabled;
 
   void startListening() {
     if (_listening) return;
@@ -53,23 +60,25 @@ class ManualTrigger {
   }
 
   // Fire the trigger programmatically (used by long-press hold completion).
+  // This now informs the caller that the method was 'long_press'.
   void fireTrigger() {
-    // If the global confirmation gate is active, don't trigger haptic/notifications here.
+    // If the global confirmation gate is active, still notify the upper layer but don't do local haptics.
     if (isConfirmationActive()) {
-      // Still call onTriggered so upper layer can handle (it will likely be ignored too).
-      onTriggered();
+      onTriggered('long_press');
       return;
     }
 
-    // Provide a short haptic feedback to indicate the manual trigger fired (only when allowed).
     try {
       HapticFeedback.heavyImpact();
     } catch (_) {}
 
-    onTriggered();
+    onTriggered('long_press');
   }
 
   void _handleEvent(AccelerometerEvent ev) {
+    // If shake detection is disabled (e.g. Auto Safety ON), ignore accelerometer input.
+    if (!_shakeEnabled) return;
+
     // compute magnitude
     final mag = math.sqrt(ev.x * ev.x + ev.y * ev.y + ev.z * ev.z);
 
@@ -78,7 +87,7 @@ class ManualTrigger {
     _recentMags.add(mag);
 
     // compute delta from a local baseline (simple low-pass)
-    final baseline = _recentMags.reduce((a, b) => a + b) / _recentMags.length;
+    final baseline = _recentMags.isNotEmpty ? _recentMags.reduce((a, b) => a + b) / _recentMags.length : mag;
     final delta = (mag - baseline).abs();
 
     if (delta >= threshold) {
@@ -92,16 +101,16 @@ class ManualTrigger {
       if (_recentPeakTimestamps.length >= requiredPeaks) {
         debugPrint('ManualTrigger: shake confirmed (peaks=${_recentPeakTimestamps.length}) -> triggering');
 
-        // If the global gate is active, do not perform haptic here and allow upper layer to ignore.
+        // If the global gate is active, do not perform haptic here.
         if (!isConfirmationActive()) {
           try { HapticFeedback.heavyImpact(); } catch (_) {}
         } else {
           debugPrint('ManualTrigger: HAPTIC suppressed due to confirmation/cooldown gate');
         }
 
-        // Call callback
+        // Inform caller: method = 'shake'
         try {
-          onTriggered();
+          onTriggered('shake');
         } catch (e) {
           debugPrint('ManualTrigger: onTriggered callback error: $e');
         }

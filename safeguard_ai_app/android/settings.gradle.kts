@@ -1,4 +1,4 @@
-pluginManagement {
+git statusgit statuspluginManagement {
     val flutterSdkPath =
         run {
             val properties = java.util.Properties()

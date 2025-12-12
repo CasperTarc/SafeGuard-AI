@@ -252,8 +252,8 @@ class _LongPressPageState extends State<LongPressPage> with TickerProviderStateM
   @override
   void initState() {
     super.initState();
-    _ringController = AnimationController(vsync: this, duration: const Duration(seconds: requiredHoldSeconds));
-    // ManualTrigger: enableFeedback=true so it vibrates when fired
+    _ringController = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    // ManualTrigger now expects onTriggered: (String method)
     _manualTrigger = ManualTrigger(onTriggered: _onManualTriggered);
   }
 
@@ -265,9 +265,13 @@ class _LongPressPageState extends State<LongPressPage> with TickerProviderStateM
     super.dispose();
   }
 
-  void _onManualTriggered() {
+  // Update the handler to accept the method string.
+  // ManualTrigger will call onTriggered('long_press') for programmatic long-press
+  void _onManualTriggered(String method) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Confirmed')));
+    // If you want different behavior depending on method:
+    // if (method == 'long_press') { ... } else if (method == 'shake') { ... }
   }
 
   // Start the hold timer
@@ -456,6 +460,7 @@ class _ShakePageState extends State<ShakePage> {
   void initState() {
     super.initState();
     _manualTrigger = ManualTrigger(onTriggered: _onTriggered);
+    _manualTrigger.startListening();
   }
 
   @override
@@ -464,22 +469,20 @@ class _ShakePageState extends State<ShakePage> {
     super.dispose();
   }
 
-  void _onTriggered() {
-    // ManualTrigger already runs its own haptic feedback. Add UI side haptic too
-    // to help devices where one source might be suppressed.
+    // Update the onTriggered to accept the method parameter
+  void _onTriggered(String method) {
+    // ManualTrigger will call this with 'shake' when shake is detected,
+    // or 'long_press' if fireTrigger() was used.
     try {
       HapticFeedback.mediumImpact();
-    } catch (_) {
-      // ignore if not supported
-    }
-
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _status = 'Shake detected';
     });
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shake detected')));
   }
-
+  
   void _toggleListening() {
     setState(() {
       _listening = !_listening;
